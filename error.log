@@ -1,3 +1,0 @@
-
-./linux/scripting/hello.bash: line 15: [-ferror.log]: command not found
-./linux/scripting/hello.bash: line 21: [-foutput.log]: command not found
