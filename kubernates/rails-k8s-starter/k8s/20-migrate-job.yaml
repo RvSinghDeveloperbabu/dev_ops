@@ -1,0 +1,57 @@
+# Runs `rails db:prepare` once, to completion, BEFORE the new app version starts.
+# db:prepare creates the database and loads the schema if it is missing,
+# otherwise it just runs pending migrations.
+#
+# WHY WE ADD IT:
+#   In Docker Compose you might run `docker compose run web rails db:migrate` by hand.
+#   A Job is the Kubernetes way: a task that runs once and stops (not forever).
+#   We do NOT run migrations inside the API pods, because you have 2+ copies and
+#   they would all migrate at the same time. One Job runs it exactly once.
+#   Order: apply this Job, wait for it to finish, then deploy the new app version.
+#
+# WHAT IF YOU CHANGE THE APP NAME?
+#   - `image: myapp/rails-api:1.0.0` must be the SAME image as 30-rails-api.yaml
+#     and 31-sidekiq.yaml. Example: you rebuild the image as `shop/api:2.0.0`.
+#     Change it in all three files. If this Job still has the old tag, it will
+#     migrate with OLD code and your new columns will not be created.
+#   - `name: rails-migrate` is what you use in commands:
+#       kubectl -n myapp wait --for=condition=complete job/rails-migrate
+#     Rename it to `shop-migrate` and these commands must use the new name.
+#   - configMapRef `rails-config` / secretRef `rails-secrets` must match the names
+#     in 01-configmap.yaml and secrets.example.yaml.
+#   - `namespace: myapp` must match the Namespace (see 00-namespace.yaml).
+#
+# Jobs cannot be edited after creation. Before each release, delete the old one:
+#   kubectl -n myapp delete job rails-migrate --ignore-not-found
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rails-migrate
+  namespace: myapp
+spec:
+  backoffLimit: 2                   # retry a failed run at most twice, then mark the Job failed
+  ttlSecondsAfterFinished: 3600     # Kubernetes deletes the finished Job after 1 hour
+  template:
+    metadata:
+      labels:
+        app: rails-migrate
+    spec:
+      restartPolicy: Never          # a failed pod is replaced (counted by backoffLimit), not restarted in place
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: migrate
+          image: myapp/rails-api:1.0.0          # same image as the API: same code, same migrations
+          command: ["bundle", "exec", "rails", "db:prepare"]
+          envFrom:
+            - configMapRef:
+                name: rails-config
+            - secretRef:
+                name: rails-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

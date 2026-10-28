@@ -1,0 +1,37 @@
+# Non-secret settings. Rails, Sidekiq and the migration Job load every key
+# below as an environment variable (see `envFrom` in their files).
+# Passwords and keys do NOT go here: they go in a Secret.
+#
+# WHY WE ADD IT:
+#   Same idea as `environment:` in docker-compose.yml, but kept in ONE place.
+#   Rails, Sidekiq and the migration Job all read it, so you never copy
+#   the same settings three times. Change a value here, restart the pods, done.
+#   The Docker image stays the same; only the settings change (dev vs production).
+#
+# WHAT IF YOU CHANGE THE APP NAME?
+#   - `namespace: myapp` -> must match the Namespace (see 00-namespace.yaml).
+#   - `name: rails-config` is the name other files use to find this one.
+#     Example: you rename it to `shop-config`.
+#       Then in 20-migrate-job.yaml, 30-rails-api.yaml and 31-sidekiq.yaml you
+#       must also change `configMapRef: name: rails-config` to `shop-config`.
+#       If you forget, the pod will not start. You will see the error
+#       "configmap rails-config not found" (status CreateContainerConfigError).
+#   - REDIS_URL "redis://redis:6379/0": the second `redis` is the Service name
+#     in 11-redis.yaml. If you rename that Service to `cache`, change this to
+#     redis://cache:6379/0 or Sidekiq cannot reach Redis.
+#   - FRONTEND_ORIGIN must equal the real address of your React site
+#     (the host in 40-ingress.yaml). If you change `app.localhost` to
+#     `shop.localhost` there, change it here too, or the browser blocks API calls (CORS error).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rails-config
+  namespace: myapp
+data:
+  # Every value must be a string, so numbers and booleans are quoted.
+  RAILS_ENV: "production"
+  RAILS_LOG_TO_STDOUT: "true"           # Kubernetes collects logs from stdout
+  RAILS_MAX_THREADS: "5"                # Puma threads per process = DB pool size
+  WEB_CONCURRENCY: "2"                  # Puma worker processes per pod
+  REDIS_URL: "redis://redis:6379/0"     # "redis" is the name of the Redis Service
+  FRONTEND_ORIGIN: "http://app.localhost:8080"   # read this in config/initializers/cors.rb

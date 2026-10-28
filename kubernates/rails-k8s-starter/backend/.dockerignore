@@ -1,0 +1,35 @@
+# Keep the build context small and keep secrets OUT of the image.
+#
+# WHY WE ADD IT: you already know this file from Docker. Here it matters extra:
+#   an image can be shared (registry, teammates). If config/master.key got copied
+#   in by `COPY . .`, anyone with the image could read it. In Kubernetes the key
+#   arrives at runtime from a Secret instead (see ../secrets.example.yaml).
+# APP NAME: nothing here depends on the app name, so renaming the app changes nothing.
+.git
+.gitignore
+.github
+
+# Secrets: never bake these into an image. They arrive at runtime from a Kubernetes Secret.
+.env*
+config/master.key
+config/credentials/*.key
+
+# Runtime junk
+log/*
+tmp/*
+storage/*
+!log/.keep
+!tmp/.keep
+!storage/.keep
+
+# Not needed in production
+node_modules
+spec
+test
+coverage
+.rspec
+.rubocop.yml
+
+# Docker files themselves
+Dockerfile*
+.dockerignore

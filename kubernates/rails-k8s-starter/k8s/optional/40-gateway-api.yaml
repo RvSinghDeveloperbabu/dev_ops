@@ -1,0 +1,63 @@
+# OPTIONAL — the same routing as 40-ingress.yaml, written with Gateway API,
+# the successor to Ingress. Use this file OR 40-ingress.yaml, not both.
+#
+# Needs the Gateway API CRDs plus an implementation installed in the cluster
+# (for example Envoy Gateway, Traefik, Cilium, NGINX Gateway Fabric, or the
+# AWS Load Balancer Controller). Each installs a GatewayClass; put its name below.
+#
+# Gateway   = the entry point (owned by whoever runs the cluster)
+# HTTPRoute = the routing rules (owned by the app team)
+#
+# WHY IT EXISTS:
+#   Ingress is the older, simpler way. Gateway API is the newer way that splits the
+#   job in two: platform team owns the Gateway, app team owns its HTTPRoutes.
+#   For learning, use 40-ingress.yaml and ignore this file. It is here only so you
+#   can compare the two styles side by side.
+#
+# WHAT IF YOU CHANGE THE APP NAME?
+#   - `parentRefs: name: myapp-gateway` must equal the Gateway `name` above.
+#     Example: rename the Gateway to `shop-gateway` and forget a route ->
+#     that route is "not accepted" and traffic to it gets 404.
+#   - `backendRefs: name: frontend / rails-api` must equal the Service names
+#     (32-frontend.yaml, 30-rails-api.yaml), same as in the Ingress file.
+#   - `hostnames` = same as `host:` in 40-ingress.yaml.
+#   - `namespace: myapp` must match 00-namespace.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: myapp-gateway
+  namespace: myapp
+spec:
+  gatewayClassName: eg            # "eg" is Envoy Gateway's default; use your implementation's class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: frontend
+  namespace: myapp
+spec:
+  parentRefs:
+    - name: myapp-gateway
+  hostnames: ["app.localhost"]
+  rules:
+    - backendRefs:
+        - name: frontend
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rails-api
+  namespace: myapp
+spec:
+  parentRefs:
+    - name: myapp-gateway
+  hostnames: ["api.localhost"]
+  rules:
+    - backendRefs:
+        - name: rails-api
+          port: 80

@@ -1,0 +1,140 @@
+# The Rails API: a Deployment (runs and replaces the pods)
+# plus a Service (one stable address in front of them).
+#
+# WHY WE ADD IT:
+#   This is your `web:` service from docker-compose.yml. Two objects work together:
+#   - Deployment = "keep 2 copies (pods) of this container running; on a new
+#     version, replace them one by one with no downtime".
+#   - Service = pods get new IP addresses every time they restart, so nobody can
+#     call them by IP. The Service is a fixed name (`rails-api`) that always
+#     forwards to whichever pods are healthy right now.
+#   A "pod" is the smallest unit: usually one container (like one docker run).
+#
+# HOW THE PIECES FIND EACH OTHER (labels):
+#   Kubernetes does not connect things by file or by order. It connects them by
+#   LABELS. The pod says `app: rails-api`. The Deployment `selector` and the
+#   Service `selector` both say "find pods with app: rails-api". Same word = connected.
+#
+# WHAT IF YOU CHANGE THE APP NAME?  Three different kinds of names live here:
+#
+#   1) The label `app: rails-api` (appears 4 times: metadata labels, selector,
+#      pod template labels, Service selector).
+#      Example: you change only the pod template label to `app: shop-api`.
+#        -> The Deployment refuses to apply ("selector does not match template labels").
+#      Example: you change Deployment + template but forget the Service selector.
+#        -> Pods run fine, but the Service has NO pods. The site shows 502/503.
+#      Rule: change all of them, or none.
+#      Also, 50-hpa.yaml and 51-pdb.yaml point at this name/label. Update them too.
+#
+#   2) The object name `name: rails-api` (Deployment and Service).
+#      It becomes the DNS name http://rails-api inside the cluster.
+#      Example: rename the Service to `shop-api`. Then 40-ingress.yaml
+#      (backend service name) must say `shop-api`, or the Ingress returns 503.
+#      Also 50-hpa.yaml `scaleTargetRef.name` must match the Deployment name.
+#
+#   3) The image `myapp/rails-api:1.0.0` = the Docker image you built with
+#      `docker build -t myapp/rails-api:1.0.0 backend/`. Kubernetes only pulls what
+#      you name. Example: you change to `myapp/rails-api:1.0.1` -> Kubernetes does a
+#      rolling update: starts 1 new pod (maxSurge: 1), waits until it is ready,
+#      stops 1 old pod, repeats. Users see no downtime.
+#      If the name does not exist: pod status ErrImagePull / ImagePullBackOff.
+#      Keep this equal in 20-migrate-job.yaml and 31-sidekiq.yaml.
+#
+#   Also: `namespace: myapp` must match 00-namespace.yaml.
+#
+# SMALL GLOSSARY OF THE SETTINGS BELOW:
+#   replicas        how many copies. 2 means if one dies, the other still serves.
+#   requests        what the pod is promised (used to decide which machine it goes on).
+#   limits          the ceiling. Using more memory than this kills the container.
+#   readiness probe "is it ready for traffic?" no -> removed from Service, not restarted.
+#   liveness probe  "is it stuck?" yes -> container is restarted.
+#   startup probe   gives a slow boot extra time before the other two start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rails-api
+  namespace: myapp
+  labels:
+    app: rails-api
+spec:
+  replicas: 2                    # delete this line once 50-hpa.yaml manages the count
+  revisionHistoryLimit: 5        # old versions kept for `kubectl rollout undo`
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                # start 1 new pod before stopping an old one
+      maxUnavailable: 0          # never drop below the desired count during a release
+  selector:
+    matchLabels:
+      app: rails-api             # MUST match the template labels below
+  template:
+    metadata:
+      labels:
+        app: rails-api
+    spec:
+      # On shutdown Kubernetes sends SIGTERM, waits this long, then SIGKILL.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: rails
+          image: myapp/rails-api:1.0.0       # never :latest — use a version or git SHA
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000            # Puma's port
+          envFrom:
+            - configMapRef:
+                name: rails-config           # RAILS_ENV, threads, REDIS_URL ...
+            - secretRef:
+                name: rails-secrets          # RAILS_MASTER_KEY, DATABASE_URL
+          resources:
+            requests:                        # reserved for the pod; used for scheduling
+              cpu: 250m                      # 0.25 of a CPU core
+              memory: 512Mi
+            limits:
+              memory: 1Gi                    # above this the container is OOMKilled
+          # Startup: give Rails up to 30 x 5s = 150s to boot before other probes begin.
+          startupProbe:
+            httpGet:
+              path: /up                      # Rails 7.1+ built-in health check
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          # Readiness: "send me traffic?" Failing removes the pod from the Service; no restart.
+          readinessProbe:
+            httpGet:
+              path: /up
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Liveness: "are you stuck?" Failing restarts the container.
+          livenessProbe:
+            httpGet:
+              path: /up
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Wait while the pod is removed from the Service,
+                # so no request arrives after Puma starts shutting down.
+                command: ["sleep", "5"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rails-api
+  namespace: myapp
+spec:
+  type: ClusterIP                # reachable only inside the cluster; the Ingress exposes it
+  selector:
+    app: rails-api               # send traffic to every ready pod with this label
+  ports:
+    - name: http
+      port: 80                   # what callers use: http://rails-api
+      targetPort: http           # the container port named "http" (3000)

@@ -1,0 +1,10 @@
+# WHY WE ADD IT: keeps the build fast and small (node_modules and old builds are
+#   rebuilt inside Docker, so copying them from your laptop is wasteful and can break the build).
+# APP NAME: nothing here depends on the app name.
+node_modules
+dist
+build
+.git
+.env*
+Dockerfile*
+.dockerignore

@@ -1,0 +1,54 @@
+# =====================================================================
+# START HERE: THE BIG PICTURE (for someone who knows Docker Compose)
+# =====================================================================
+# In Docker Compose you write ONE docker-compose.yml and run `docker compose up`.
+# In Kubernetes (k8s) you write MANY small YAML files and run
+#   kubectl apply -f k8s/
+# Each file describes one "thing" you WANT. Kubernetes then keeps reality equal
+# to what you wrote. If a container dies, it starts a new one. You do not do it.
+#
+# Compose word        ->  Kubernetes word (what it is)
+#   services:         ->  Deployment (runs N copies of a container, replaces them if they die)
+#   ports: / networks ->  Service    (one stable name + address in front of those copies)
+#   environment:      ->  ConfigMap  (normal settings) and Secret (passwords)
+#   volumes:          ->  PersistentVolumeClaim (a disk that survives restarts)
+#   (nothing)         ->  Ingress    (the front door from the internet to your Services)
+#   (nothing)         ->  Namespace  (a folder that holds everything for one app)
+#   command run once  ->  Job        (run a task one time, e.g. database migration)
+#
+# The numbers in the file names (00, 01, 10, 20, 30 ...) are only an ORDER:
+#   00 folder -> 01 settings -> 10 databases -> 20 migration -> 30 apps -> 40 door -> 50 extras
+# `kubectl apply -f k8s/` reads files in name order, so the folder exists first.
+#
+# This starter runs 4 things:  frontend (React+nginx), rails-api, sidekiq, and
+# the helpers postgres + redis. Secrets are NOT in this folder; see ../secrets.example.yaml
+#
+# ---------------------------------------------------------------------
+# THIS FILE: a Namespace is a folder inside the cluster.
+# Everything for this app lives in "myapp", so you can list, limit and delete it as one unit.
+#
+# WHY WE ADD IT:
+#   One cluster can run many apps. Without a Namespace they all mix together and
+#   names can clash. With it, `kubectl delete namespace myapp` removes the whole app.
+#
+# WHAT IF YOU CHANGE THE APP NAME? (the most important thing to understand)
+#   The word "myapp" is NOT magic. It is only a text label that you choose.
+#   But it is written in EVERY file (`namespace: myapp`). They must all match.
+#
+#   Example: you change `name: myapp` below to `name: shop`.
+#     - This file now creates a folder called "shop".
+#     - But 10-postgres.yaml, 30-rails-api.yaml, etc. still say `namespace: myapp`.
+#       Kubernetes will then say: namespaces "myapp" not found. Nothing is created.
+#     - FIX: change `namespace: myapp` to `namespace: shop` in ALL files in k8s/
+#       and secrets.example.yaml. (Easy way: search "myapp" and replace.)
+#     - Commands change too:  kubectl -n shop get pods   (instead of -n myapp)
+#
+#   Good news: inside the same namespace, services reach each other by short
+#   name (http://rails-api, postgres, redis), so those do NOT contain "myapp".
+# =====================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: myapp
+  labels:
+    app.kubernetes.io/part-of: myapp

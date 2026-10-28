@@ -1,0 +1,99 @@
+# LEARNING / LOCAL ONLY. In production use a managed database (Amazon RDS).
+#
+# A StatefulSet (not a Deployment) because a database needs:
+#   - a stable pod name (postgres-0), and
+#   - its own disk that survives restarts and moves to a new node.
+#
+# WHY WE ADD IT:
+#   This is the `db:` service from your docker-compose.yml with a `volumes:` disk.
+#   A normal Deployment treats pods as disposable and gives them no fixed disk.
+#   A database must keep its data, so we use a StatefulSet + volumeClaimTemplates.
+#   The Service below gives it the name "postgres", so Rails can connect with
+#   postgres://...@postgres:5432/...   (like a service name in Compose).
+#
+# WHAT IF YOU CHANGE THE APP NAME?
+#   - The Service name `postgres` is the HOST NAME inside DATABASE_URL
+#     (see ../secrets.example.yaml). The two must match.
+#     Example: you rename the Service to `shop-db`.
+#       Then DATABASE_URL must become postgres://myapp:<pw>@shop-db:5432/...
+#       If not, Rails says: could not translate host name "postgres" to address.
+#     Also change `serviceName: postgres` in the StatefulSet to `shop-db`.
+#   - `app: postgres` appears 3 times (Service selector, StatefulSet selector,
+#     pod labels). All three must be the same word, or the Service finds no pod.
+#   - The pod name comes from the StatefulSet name: `postgres` -> postgres-0.
+#     The disk is named from volumeClaimTemplates + that: data-postgres-0.
+#     Example: rename the StatefulSet to `shop-db`. You get pod shop-db-0 and a
+#     NEW empty disk data-shop-db-0. Your old data stays in the old disk but
+#     is no longer used. So pick the name early, before real data exists.
+#   - POSTGRES_DB / POSTGRES_USER values live in postgres-secrets (secrets.example.yaml).
+#     Changing the database name there creates a new empty database only on the
+#     FIRST start of a fresh disk. On an existing disk it is ignored.
+
+# Headless Service: gives Postgres a stable DNS name ("postgres") inside the namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: myapp
+spec:
+  clusterIP: None          # "headless": DNS points straight at the pod, no load balancing
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: myapp
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine          # match your production major version
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secrets       # POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+          env:
+            # A subfolder of the disk: a fresh volume can contain lost+found,
+            # and Postgres refuses to initialise a non-empty folder.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  # One PersistentVolumeClaim per pod, named data-postgres-0.
+  # It is NOT deleted when you delete the StatefulSet: your data survives.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
